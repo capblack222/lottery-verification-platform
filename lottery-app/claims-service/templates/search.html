@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Search Claims{% endblock %}
+{% block page_title %}Search Claims{% endblock %}
+{% block content %}
+<div class="card" style="margin-bottom:var(--space-6)">
+  <h2 class="card-title">Find a Registered Claim</h2>
+  <form method="GET" action="{{ url_for('search_claims') }}" class="search-form">
+    <input class="form-input" type="text" name="name"
+      placeholder="Claimant name" value="{{ q_name }}"/>
+    <input class="form-input" type="text" name="ticket"
+      placeholder="Ticket number" value="{{ q_ticket }}" style="text-transform:uppercase"/>
+    <input class="form-input" type="text" name="ref"
+      placeholder="Claim ID (CLM-…)" value="{{ q_ref }}" style="text-transform:uppercase"/>
+    <button type="submit" class="btn btn-primary">Search</button>
+    {% if searched %}
+    <a href="{{ url_for('search_claims') }}" class="btn btn-secondary">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if searched %}
+  {% if results %}
+  <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-4)">
+    {{ results|length }} result{{ 's' if results|length != 1 }} found
+  </p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Claim Ref</th><th>Claimant</th><th>Ticket</th>
+          <th>Draw Date</th><th>Prize</th><th>Status</th><th>Registered</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in results %}
+        <tr>
+          <td class="mono">{{ c.claim_ref }}</td>
+          <td>{{ c.claimant.full_name }}</td>
+          <td class="mono">{{ c.ticket.ticket_number }}</td>
+          <td>{{ c.ticket.draw.draw_date }}</td>
+          <td style="font-weight:700;color:var(--color-success)">
+            ${{ "{:,.2f}".format(c.ticket.prize_amount) }}
+          </td>
+          <td><span class="badge badge-registered">{{ c.claim_status }}</span></td>
+          <td style="color:var(--color-text-muted)">
+            {{ c.claimed_at.strftime('%Y-%m-%d %H:%M') }}
+          </td>
+          <td>
+            <a href="{{ url_for('claim_detail', claim_ref=c.claim_ref) }}"
+               class="btn btn-ghost btn-sm">View &rarr;</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align:center;padding:var(--space-16);color:var(--color-text-muted)">
+    <h3 style="color:var(--color-text);font-weight:700">No claims found</h3>
+    <p style="font-size:var(--text-sm);margin-top:var(--space-2)">
+      Try a different name, ticket number, or claim reference.
+    </p>
+  </div>
+  {% endif %}
+{% else %}
+<div style="text-align:center;padding:var(--space-16);color:var(--color-text-muted)">
+  <h3 style="color:var(--color-text);font-weight:700">Search registered claims</h3>
+  <p style="font-size:var(--text-sm);margin-top:var(--space-2)">
+    Enter a claimant name, ticket number, or claim ID to begin.
+  </p>
+</div>
+{% endif %}
+{% endblock %}

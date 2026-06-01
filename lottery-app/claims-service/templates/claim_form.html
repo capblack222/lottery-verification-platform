@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Register Claim{% endblock %}
+{% block page_title %}Register Claim{% endblock %}
+{% block content %}
+<div style="margin-bottom:var(--space-5)">
+  <a href="{{ verify_url }}/verify" class="btn btn-ghost btn-sm">&larr; Back</a>
+</div>
+<div style="display:grid;grid-template-columns:1fr 300px;gap:var(--space-6);align-items:start">
+  <div class="card">
+    <h2 class="card-title">Claimant Information</h2>
+    <form method="POST" action="{{ url_for('register_claim') }}">
+      <input type="hidden" name="ticket_id" value="{{ ticket.id }}"/>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+        <div class="form-group" style="grid-column:1/-1">
+          <label class="form-label" for="full_name">
+            Full Name <span style="color:var(--color-error)">*</span>
+          </label>
+          <input class="form-input" type="text" id="full_name" name="full_name"
+            placeholder="e.g. Jane Smith" required/>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="email">
+            Email <span style="color:var(--color-error)">*</span>
+          </label>
+          <input class="form-input" type="email" id="email" name="email"
+            placeholder="jane@example.com" required/>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="phone">
+            Phone <span style="color:var(--color-error)">*</span>
+          </label>
+          <input class="form-input" type="tel" id="phone" name="phone"
+            placeholder="555-000-0000" required/>
+        </div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label class="form-label" for="address">Address (optional)</label>
+          <input class="form-input" type="text" id="address" name="address"
+            placeholder="123 Main St, City, State"/>
+        </div>
+      </div>
+      <div style="display:flex;gap:var(--space-3);margin-top:var(--space-4)">
+        <button type="submit" class="btn btn-primary">Confirm Registration</button>
+        <a href="{{ verify_url }}/verify" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+  <div class="card" style="position:sticky;top:var(--space-16)">
+    <h3 style="font-size:var(--text-base);font-weight:700;margin-bottom:var(--space-4)">
+      Ticket Summary
+    </h3>
+    <div style="display:flex;flex-direction:column;gap:var(--space-3)">
+      <div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);font-weight:600;
+          text-transform:uppercase;letter-spacing:.06em">Ticket Number</div>
+        <div class="mono" style="font-weight:700;margin-top:2px">{{ ticket.ticket_number }}</div>
+      </div>
+      <div>
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);font-weight:600;
+          text-transform:uppercase;letter-spacing:.06em">Draw</div>
+        <div style="font-weight:600;margin-top:2px">{{ draw.draw_name }}</div>
+      </div>
+      <div style="padding-top:var(--space-3);border-top:1px solid var(--color-divider)">
+        <div style="font-size:var(--text-xs);color:var(--color-text-muted);font-weight:600;
+          text-transform:uppercase;letter-spacing:.06em">Prize Amount</div>
+        <div class="prize-amount" style="margin-top:4px">
+          ${{ "{:,.2f}".format(ticket.prize_amount) }}
+        </div>
+      </div>
+      <span class="badge badge-winner">Eligible for Claim</span>
+    </div>
+    <div style="margin-top:var(--space-5);padding:var(--space-3);
+      background:var(--color-warning-highlight);border-radius:var(--radius-md)">
+      <p style="font-size:var(--text-xs);color:var(--color-warning);font-weight:600">
+        &#9888; Each winning ticket can only be registered once.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}

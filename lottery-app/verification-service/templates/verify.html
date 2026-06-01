@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Verify Ticket{% endblock %}
+{% block page_title %}Verify Ticket{% endblock %}
+{% block content %}
+
+<div class="card" style="max-width:560px;margin-bottom:var(--space-6)">
+  <h2 class="card-title">Enter Ticket Details</h2>
+  <p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-bottom:var(--space-5)">
+    Enter the ticket number and draw date to check winner status.
+  </p>
+  <form method="POST" action="{{ url_for('verify') }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+      <div class="form-group">
+        <label class="form-label" for="ticket_number">Ticket Number</label>
+        <input class="form-input" type="text" id="ticket_number" name="ticket_number"
+          value="{{ ticket_number }}" placeholder="e.g. TKT-001-WIN"
+          required style="text-transform:uppercase" autocomplete="off"/>
+        <span class="form-hint">Case-insensitive</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="draw_date">Draw Date</label>
+        <input class="form-input" type="date" id="draw_date" name="draw_date"
+          value="{{ draw_date }}" required/>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>Verify Ticket
+    </button>
+  </form>
+</div>
+
+{% if result %}
+  {% if result.outcome == 'NOT_FOUND' %}
+  <div class="result-card not-found">
+    <div class="result-outcome" style="color:var(--color-error)">&#10007; Ticket Not Found</div>
+    <p style="font-size:var(--text-sm)">
+      No ticket matching <strong>{{ ticket_number }}</strong> was found for
+      draw date <strong>{{ draw_date }}</strong>.
+    </p>
+  </div>
+
+  {% elif result.outcome == 'NOT_WINNER' %}
+  <div class="result-card not-winner">
+    <div class="result-outcome" style="color:var(--color-text-muted)">&#10007; Not a Winning Ticket</div>
+    <div class="result-grid">
+      <div class="result-field"><label>Ticket Number</label>
+        <div class="value">{{ result.ticket.ticket_number }}</div></div>
+      <div class="result-field"><label>Draw</label>
+        <div class="value">{{ result.draw.draw_name }}</div></div>
+      <div class="result-field"><label>Draw Date</label>
+        <div class="value">{{ result.draw.draw_date }}</div></div>
+      <div class="result-field"><label>Status</label>
+        <span class="badge badge-notwinner">Not a Winner</span></div>
+    </div>
+  </div>
+
+  {% elif result.outcome == 'ALREADY_CLAIMED' %}
+  <div class="result-card claimed">
+    <div class="result-outcome" style="color:var(--color-primary)">
+      &#10003; Winning Ticket &mdash; Already Registered
+    </div>
+    <div class="result-grid">
+      <div class="result-field"><label>Ticket Number</label>
+        <div class="value">{{ result.ticket.ticket_number }}</div></div>
+      <div class="result-field"><label>Prize Amount</label>
+        <div class="value">${{ "{:,.2f}".format(result.ticket.prize_amount) }}</div></div>
+      <div class="result-field"><label>Draw</label>
+        <div class="value">{{ result.draw.draw_name }}</div></div>
+      <div class="result-field"><label>Claim Reference</label>
+        <div class="value mono">{{ result.claim.claim_ref }}</div></div>
+    </div>
+    <a href="{{ claims_url }}/claims/{{ result.claim.claim_ref }}"
+       class="btn btn-secondary btn-sm">View Claim Details &rarr;</a>
+  </div>
+
+  {% elif result.outcome == 'WINNER' %}
+  <div class="result-card winner">
+    <div class="result-outcome" style="color:var(--color-success)">
+      &#127942; Winning Ticket &mdash; Eligible for Registration
+    </div>
+    <div class="result-grid">
+      <div class="result-field"><label>Ticket Number</label>
+        <div class="value">{{ result.ticket.ticket_number }}</div></div>
+      <div class="result-field"><label>Prize Amount</label>
+        <div class="prize-amount">${{ "{:,.2f}".format(result.ticket.prize_amount) }}</div></div>
+      <div class="result-field"><label>Draw</label>
+        <div class="value">{{ result.draw.draw_name }}</div></div>
+      <div class="result-field"><label>Draw Date</label>
+        <div class="value">{{ result.draw.draw_date }}</div></div>
+      <div class="result-field"><label>Status</label>
+        <span class="badge badge-winner">Unclaimed</span></div>
+    </div>
+    <a href="{{ claims_url }}/claims/new/{{ result.ticket.id }}" class="btn btn-primary">
+      Register Claim
+    </a>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

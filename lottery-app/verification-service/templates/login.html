@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Sign In{% endblock %}
+{% block auth_content %}
+<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  background:var(--color-bg);padding:var(--space-4)">
+  <div style="width:100%;max-width:400px">
+    <div style="text-align:center;margin-bottom:var(--space-8)">
+      <svg width="48" height="48" viewBox="0 0 32 32" fill="none"
+           style="margin:0 auto var(--space-4)">
+        <rect width="32" height="32" rx="8" fill="var(--color-primary)"/>
+        <circle cx="16" cy="12" r="5" fill="white" opacity=".9"/>
+        <path d="M9 24c0-3.866 3.134-7 7-7s7 3.134 7 7" stroke="white"
+              stroke-width="2" stroke-linecap="round" fill="none" opacity=".7"/>
+      </svg>
+      <h1 style="font-size:var(--text-xl);font-weight:800">LottoClaim</h1>
+      <p style="color:var(--color-text-muted);font-size:var(--text-sm);margin-top:var(--space-1)">
+        Customer Service Portal
+      </p>
+    </div>
+    <div class="card">
+      <h2 class="card-title" style="font-size:var(--text-lg)">Sign in to your account</h2>
+      {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in msgs %}
+          <div class="alert alert-{{ cat }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+      <form method="POST" action="{{ url_for('login') }}">
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input class="form-input" type="text" id="username" name="username"
+            placeholder="Enter your username" required autofocus/>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input class="form-input" type="password" id="password" name="password"
+            placeholder="Enter your password" required/>
+        </div>
+        <button type="submit" class="btn btn-primary"
+          style="width:100%;justify-content:center;margin-top:var(--space-2)">
+          Sign in
+        </button>
+      </form>
+    </div>
+    <p style="text-align:center;font-size:var(--text-xs);color:var(--color-text-faint);margin-top:var(--space-6)">
+      Demo: agent1 / Agent@123 &nbsp;|&nbsp; supervisor / Super@123
+    </p>
+  </div>
+</div>
+{% endblock %}

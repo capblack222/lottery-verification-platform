@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Claim {{ claim.claim_ref }}{% endblock %}
+{% block page_title %}Claim Confirmation{% endblock %}
+{% block content %}
+<div style="margin-bottom:var(--space-5);display:flex;gap:var(--space-3)">
+  <a href="{{ verify_url }}/verify" class="btn btn-ghost btn-sm">&larr; New Verification</a>
+  <a href="{{ url_for('search_claims') }}" class="btn btn-ghost btn-sm">Search Claims</a>
+</div>
+<div class="alert alert-success">
+  Claim <strong>{{ claim.claim_ref }}</strong> has been successfully registered.
+</div>
+<div style="display:grid;grid-template-columns:1fr 240px;gap:var(--space-6);align-items:start">
+  <div style="display:flex;flex-direction:column;gap:var(--space-5)">
+    <div class="card">
+      <h2 class="card-title">Claim Details</h2>
+      <div class="result-grid">
+        <div class="result-field"><label>Claim Reference</label>
+          <div class="value mono">{{ claim.claim_ref }}</div></div>
+        <div class="result-field"><label>Status</label>
+          <span class="badge badge-registered">{{ claim.claim_status }}</span></div>
+        <div class="result-field"><label>Registered At</label>
+          <div class="value" style="font-size:var(--text-sm)">
+            {{ claim.claimed_at.strftime('%Y-%m-%d %H:%M UTC') }}</div></div>
+        <div class="result-field"><label>Registered By</label>
+          <div class="value" style="font-size:var(--text-sm)">
+            {{ claim.registered_by_user.username }}</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="font-size:var(--text-base);font-weight:700;margin-bottom:var(--space-4)">
+        Ticket &amp; Draw
+      </h3>
+      <div class="result-grid">
+        <div class="result-field"><label>Ticket Number</label>
+          <div class="value mono">{{ ticket.ticket_number }}</div></div>
+        <div class="result-field"><label>Prize Amount</label>
+          <div class="prize-amount">${{ "{:,.2f}".format(ticket.prize_amount) }}</div></div>
+        <div class="result-field"><label>Draw Name</label>
+          <div class="value">{{ draw.draw_name }}</div></div>
+        <div class="result-field"><label>Draw Date</label>
+          <div class="value">{{ draw.draw_date }}</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="font-size:var(--text-base);font-weight:700;margin-bottom:var(--space-4)">
+        Claimant Information
+      </h3>
+      <div class="result-grid">
+        <div class="result-field"><label>Full Name</label>
+          <div class="value">{{ claimant.full_name }}</div></div>
+        <div class="result-field"><label>Email</label>
+          <div class="value" style="font-size:var(--text-sm)">{{ claimant.email }}</div></div>
+        <div class="result-field"><label>Phone</label>
+          <div class="value" style="font-size:var(--text-sm)">{{ claimant.phone }}</div></div>
+        {% if claimant.address %}
+        <div class="result-field"><label>Address</label>
+          <div class="value" style="font-size:var(--text-sm)">{{ claimant.address }}</div></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div style="position:sticky;top:var(--space-16)">
+    <div class="card" style="text-align:center">
+      <h3 style="font-size:var(--text-base);font-weight:700;margin-bottom:var(--space-4)">
+        QR Confirmation
+      </h3>
+      <div class="qr-box" style="margin:0 auto">
+        <img src="data:image/png;base64,{{ qr_b64 }}"
+             alt="QR for {{ claim.claim_ref }}" width="180" height="180"/>
+        <div class="qr-label">{{ claim.claim_ref }}</div>
+      </div>
+      <p style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:var(--space-4)">
+        Scan to retrieve this confirmation
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}
