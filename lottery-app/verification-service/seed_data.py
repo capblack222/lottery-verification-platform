@@ -1,7 +1,7 @@
-# from app import create_app
 from models import db, User, Draw, Ticket, Claimant, Claim
 from datetime import date
 import os
+import uuid
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
@@ -83,14 +83,17 @@ def seed_database():
             claimant = Claimant(full_name=name, email=email, phone=phone, address=addr)
             db.session.add(claimant)
             db.session.flush()
-            count = Claim.query.count() + 1
-            ref = f"CLM-2026-{count:06d}"
             claim = Claim(
-                claim_ref=ref, ticket_id=t.id, claimant_id=claimant.id,
+                claim_ref=str(uuid.uuid4()),  # unique placeholder replaced after flush
+                ticket_id=t.id, claimant_id=claimant.id,
                 registered_by=agent.id, claim_status="REGISTERED",
-                qr_payload=f"{BASE_URL}/claims/{ref}",
+                qr_payload=None,
             )
             db.session.add(claim)
+            db.session.flush()  # assigns claim.id from DB sequence
+            ref = f"CLM-2026-{claim.id:06d}"
+            claim.claim_ref = ref
+            claim.qr_payload = f"{BASE_URL}/claims/{ref}"
     db.session.commit()
 
     print("\nSeed complete. Demo tickets:")

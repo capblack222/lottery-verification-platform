@@ -9,6 +9,7 @@
     Enter the ticket number and draw date to check winner status.
   </p>
   <form method="POST" action="{{ url_for('verify') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
       <div class="form-group">
         <label class="form-label" for="ticket_number">Ticket Number</label>

@@ -18,6 +18,7 @@ def get_secret(secret_name):
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    WTF_CSRF_ENABLED = True
     VERIFY_SERVICE_URL = os.environ.get("VERIFY_SERVICE_URL", "http://localhost:8000")
     CLAIMS_SERVICE_URL = os.environ.get("CLAIMS_SERVICE_URL", "http://localhost:8001")
 

@@ -1,9 +1,11 @@
 import io
+import uuid
 import base64
 import logging
 from datetime import datetime, timezone
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
 from sqlalchemy.exc import IntegrityError
 import qrcode
 from models import db, User, Ticket, Claimant, Claim, AuditLog
@@ -21,7 +23,7 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     db.init_app(app)
-
+    CSRFProtect(app)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
     @app.context_processor
@@ -58,11 +60,6 @@ def create_app():
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode()
-
-    def next_claim_ref() -> str:
-        year = datetime.now(timezone.utc).year
-        count = Claim.query.count() + 1
-        return f"CLM-{year}-{count:06d}"
 
     # ── Health check ──────────────────────────────────────────────────────────
     @app.route("/health")
@@ -155,14 +152,18 @@ def create_app():
             db.session.add(claimant)
             db.session.flush()
 
-            claim_ref = next_claim_ref()
-            qr_data = url_for("claim_detail", claim_ref=claim_ref, _external=True)
             claim = Claim(
-                claim_ref=claim_ref, ticket_id=ticket.id,
+                claim_ref=str(uuid.uuid4()),  # unique placeholder replaced after flush
+                ticket_id=ticket.id,
                 claimant_id=claimant.id, registered_by=current_user.id,
-                claim_status="REGISTERED", qr_payload=qr_data,
+                claim_status="REGISTERED", qr_payload=None,
             )
             db.session.add(claim)
+            db.session.flush()  # assigns claim.id from DB sequence
+            claim_ref = f"CLM-{datetime.now(timezone.utc).year}-{claim.id:06d}"
+            qr_data = url_for("claim_detail", claim_ref=claim_ref, _external=True)
+            claim.claim_ref = claim_ref
+            claim.qr_payload = qr_data
             ticket.status = "CLAIMED"
             log_audit("CLAIM_REGISTERED", "claim", claim_ref,
                       f"ticket={ticket.ticket_number} claimant={full_name}")

@@ -2,9 +2,10 @@ import logging
 from datetime import date
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db, User, Draw, Ticket, AuditLog
 from config import Config
-from models import db
 from seed_data import seed_database
 import time
 from sqlalchemy.exc import OperationalError
@@ -20,6 +21,8 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     db.init_app(app)
+    CSRFProtect(app)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
     with app.app_context():
 

@@ -9,6 +9,7 @@
   <div class="card">
     <h2 class="card-title">Claimant Information</h2>
     <form method="POST" action="{{ url_for('register_claim') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
       <input type="hidden" name="ticket_id" value="{{ ticket.id }}"/>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
         <div class="form-group" style="grid-column:1/-1">
