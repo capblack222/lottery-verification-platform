@@ -68,7 +68,6 @@ def create_app():
             return jsonify({"status": "ok", "db": "reachable"}), 200
         except Exception as e:
             logger.error(f"Health check DB failure: {e}")
-            # Updating the status return code from 500 to 200 before RDS is up
             return jsonify({"status": "degraded", "db": "unreachable"}), 500
 
     # ── Auth ──────────────────────────────────────────────────────────────────
