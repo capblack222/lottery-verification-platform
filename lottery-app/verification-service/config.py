@@ -21,6 +21,7 @@ class Config:
     WTF_CSRF_ENABLED = True
     VERIFY_SERVICE_URL = os.environ.get("VERIFY_SERVICE_URL", "http://localhost:8000")
     CLAIMS_SERVICE_URL = os.environ.get("CLAIMS_SERVICE_URL", "http://localhost:8001")
+    SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 
     _secret_name = os.environ.get("DB_SECRET_NAME")
     _secrets = get_secret(_secret_name) if _secret_name else None

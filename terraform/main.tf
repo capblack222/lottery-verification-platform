@@ -32,6 +32,22 @@ module "ecr" {
   source = "./modules/ecr"
 }
 
+# The IAM policy attachment is kept here (not inside the sqs module) to avoid a
+# circular dependency: sqs would need the task role name from ecs, but ecs already
+# depends on sqs for the queue URL.
+module "sqs" {
+  source = "./modules/sqs"
+
+  project_name = var.project_name
+}
+
+# Attach the SQS IAM policy to the shared ECS task role at the root level.
+# This runs after both modules are applied; no circular dependency.
+resource "aws_iam_role_policy_attachment" "ecs_sqs_access" {
+  role       = module.ecs.ecs_task_role_name
+  policy_arn = module.sqs.sqs_iam_policy_arn
+}
+
 module "ecs" {
   source = "./modules/ecs"
 
@@ -44,6 +60,7 @@ module "ecs" {
   verification_image  = "${module.ecr.verification_repository_url}:latest"
   claims_image        = "${module.ecr.claims_repository_url}:latest"
   db_host             = module.db_security.db_host
+  sqs_queue_url       = module.sqs.queue_url
 }
 
 module "db_security" {
@@ -76,6 +93,7 @@ module "monitoring" {
   rds_identifier                = module.db_security.rds_identifier
   alarm_email                   = var.alarm_email
   enable_app_log_metric_filters = var.enable_app_log_metric_filters
+  claims_dlq_name               = module.sqs.dlq_name
 
   depends_on = [
     module.ecs,

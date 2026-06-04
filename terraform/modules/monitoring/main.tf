@@ -528,3 +528,29 @@ resource "aws_cloudwatch_dashboard" "main" {
     ]
   })
 }
+
+# -----------------------------
+# SQS Dead Letter Queue Alarm
+# Only created when claims_dlq_name is provided (i.e., the sqs module is wired in).
+# Any message in the DLQ means claims-service failed to process a winning ticket
+# 3 consecutive times - this warrants immediate investigation.
+# -----------------------------
+
+resource "aws_cloudwatch_metric_alarm" "claims_dlq_not_empty" {
+  count               = var.claims_dlq_name != "" ? 1 : 0
+  alarm_name          = "${var.project_name}-claims-dlq-not-empty"
+  alarm_description   = "One or more winning-ticket messages failed claims processing and landed in the DLQ. Manual intervention required."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = var.claims_dlq_name
+  }
+}

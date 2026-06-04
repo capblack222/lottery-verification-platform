@@ -59,3 +59,9 @@ variable "enable_app_log_metric_filters" {
   type        = bool
   default     = false
 }
+
+variable "claims_dlq_name" {
+  description = "Name of the SQS claims dead letter queue. When set, a CloudWatch alarm fires if any message lands in the DLQ."
+  type        = string
+  default     = ""
+}

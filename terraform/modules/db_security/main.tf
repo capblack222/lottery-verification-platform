@@ -108,7 +108,7 @@ resource "aws_iam_role_policy_attachment" "ecs_db_policy_attach" {
   policy_arn = aws_iam_policy.ecs_db_policy.arn
 }
 
-# Add this — attach the same policy to the EXECUTION role too
+# Add this - attach the same policy to the EXECUTION role too
 resource "aws_iam_role_policy_attachment" "ecs_db_exec_policy_attach" {
   role       = var.ecs_task_execution_role_name
   policy_arn = aws_iam_policy.ecs_db_policy.arn

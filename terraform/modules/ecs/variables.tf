@@ -10,3 +10,9 @@ variable "db_host" {
   description = "RDS instance endpoint"
   type        = string
 }
+
+variable "sqs_queue_url" {
+  description = "URL of the SQS verification-claims queue injected as SQS_QUEUE_URL into both services"
+  type        = string
+  default     = ""
+}

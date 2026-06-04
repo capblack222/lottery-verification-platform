@@ -18,8 +18,6 @@ output "db_secret_arn" {
   value = module.db_security.db_secret_arn
 }
 
-#----adding monitoring outputs----
-
 output "sns_alarm_topic_arn" {
   value = module.monitoring.sns_alarm_topic_arn
 }
@@ -42,4 +40,14 @@ output "vpc_flow_log_group_name" {
 
 output "cloudwatch_dashboard_name" {
   value = module.monitoring.cloudwatch_dashboard_name
+}
+
+output "sqs_queue_url" {
+  description = "URL of the verification-claims SQS queue"
+  value       = module.sqs.queue_url
+}
+
+output "sqs_dlq_arn" {
+  description = "ARN of the claims dead letter queue"
+  value       = module.sqs.dlq_arn
 }

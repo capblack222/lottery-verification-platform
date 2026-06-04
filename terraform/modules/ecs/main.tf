@@ -134,6 +134,10 @@ resource "aws_ecs_task_definition" "verification_task" {
         {
           name  = "CLAIMS_SERVICE_URL"
           value = "https://${var.alb_dns_name}"
+        },
+        {
+          name  = "SQS_QUEUE_URL"
+          value = var.sqs_queue_url
         }
       ]
     }
@@ -203,6 +207,10 @@ resource "aws_ecs_task_definition" "claims_task" {
         {
           name  = "VERIFY_SERVICE_URL"
           value = "https://${var.alb_dns_name}"
+        },
+        {
+          name  = "SQS_QUEUE_URL"
+          value = var.sqs_queue_url
         }
       ]
     }

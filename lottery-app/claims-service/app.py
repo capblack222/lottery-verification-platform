@@ -1,7 +1,11 @@
 import io
+import json
+import threading
+import time
 import uuid
 import base64
 import logging
+import boto3
 from datetime import datetime, timezone
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -17,6 +21,98 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","msg":"%(message)s"}'
 )
 logger = logging.getLogger(__name__)
+
+
+def _handle_winner_message(body):
+    """Process one SQS winner message inside an active app context.
+
+    Writes a WINNER_QUEUED audit entry so ops can see that the claims service
+    received the event. If the ticket is ALREADY CLAIMED the message is a
+    harmless duplicate and is acknowledged WITHOUT writing anything.
+
+    Raises on unexpected errors so the caller can choose NOT to delete the
+    message - letting SQS retry up to maxReceiveCount times before routing
+    to the DLQ.
+    """
+    data = json.loads(body)
+    ticket_id     = data["ticket_id"]
+    ticket_number = data.get("ticket_number", str(ticket_id))
+
+    ticket = db.session.get(Ticket, ticket_id)
+    if ticket is None:
+        logger.warning(f"WINNER_QUEUE_UNKNOWN_TICKET ticket_id={ticket_id}")
+        return
+
+    if ticket.status == "CLAIMED":
+        logger.info(f"WINNER_QUEUE_ALREADY_CLAIMED ticket={ticket_number}")
+        return
+
+    entry = AuditLog(
+        user_id=None,
+        action="WINNER_QUEUED",
+        entity_type="ticket",
+        entity_id=str(ticket_id),
+        details=(
+            f"ticket={ticket_number} "
+            f"draw={data.get('draw_date')} "
+            f"prize={data.get('prize_amount')} "
+            f"verified_by={data.get('verified_by')} "
+            f"verified_at={data.get('verified_at')}"
+        ),
+    )
+    db.session.add(entry)
+    db.session.commit()
+    logger.info(f"WINNER_QUEUED_RECEIVED ticket={ticket_number}")
+
+
+def start_sqs_consumer(app):
+    """Start a daemon thread that long-polls SQS for winner events.
+
+    Daemon threads are killed automatically when the main process exits, so
+    no explicit shutdown logic is needed. The thread is only started when
+    SQS_QUEUE_URL is configured - running without it (e.g. local dev without
+    AWS credentials) leaves the app fully functional via HTTP alone.
+    """
+    queue_url = app.config.get("SQS_QUEUE_URL", "")
+    if not queue_url:
+        logger.info("SQS_QUEUE_URL not set - SQS consumer not started")
+        return
+
+    region = app.config.get("AWS_REGION", "us-east-1")
+
+    def poll():
+        sqs = boto3.client("sqs", region_name=region)
+        logger.info(f"SQS consumer started queue={queue_url}")
+
+        while True:
+            try:
+                response = sqs.receive_message(
+                    QueueUrl=queue_url,
+                    MaxNumberOfMessages=10,
+                    # Long polling: blocks up to 20 s before returning empty.
+                    # Matches the receive_wait_time_seconds set in Terraform.
+                    WaitTimeSeconds=20,
+                    VisibilityTimeout=30,
+                )
+                for msg in response.get("Messages", []):
+                    receipt = msg["ReceiptHandle"]
+                    try:
+                        with app.app_context():
+                            _handle_winner_message(msg["Body"])
+                        # Only delete after successful processing.
+                        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+                    except Exception as exc:
+                        # Log but do NOT delete - SQS will make the message
+                        # visible again after VisibilityTimeout expires and
+                        # retry up to maxReceiveCount (3) times before the DLQ.
+                        logger.error(f"SQS_MESSAGE_FAILED error={exc} body={msg['Body'][:200]}")
+
+            except Exception as exc:
+                logger.error(f"SQS_RECEIVE_ERROR error={exc}")
+                time.sleep(5)  # brief back-off before retrying the receive call
+
+    thread = threading.Thread(target=poll, daemon=True, name="sqs-consumer")
+    thread.start()
 
 
 def create_app():
@@ -214,6 +310,8 @@ def create_app():
     @login_required
     def index():
         return redirect(url_for("search_claims"))
+
+    start_sqs_consumer(app)
 
     return app
 

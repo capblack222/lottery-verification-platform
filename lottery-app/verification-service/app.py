@@ -1,5 +1,8 @@
+import json
 import logging
-from datetime import date
+import time
+import boto3
+from datetime import date, datetime, timezone
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
@@ -7,7 +10,6 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db, User, Draw, Ticket, AuditLog
 from config import Config
 from seed_data import seed_database
-import time
 from sqlalchemy.exc import OperationalError
 
 logging.basicConfig(
@@ -15,6 +17,31 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","msg":"%(message)s"}'
 )
 logger = logging.getLogger(__name__)
+
+
+def _publish_winner_event(queue_url, region, ticket, draw, draw_date_str, verified_by_id):
+    """Publish a winner-verified event to SQS. Errors are logged but never re-raised
+    so a SQS outage cannot break the agent's verification flow."""
+    
+    if not queue_url:
+        return
+    try:
+        sqs = boto3.client("sqs", region_name=region)
+        sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps({
+                "ticket_id":    ticket.id,
+                "ticket_number": ticket.ticket_number,
+                "draw_id":      draw.id,
+                "draw_date":    draw_date_str,
+                "prize_amount": str(ticket.prize_amount),
+                "verified_by":  verified_by_id,
+                "verified_at":  datetime.now(timezone.utc).isoformat(),
+            }),
+        )
+        logger.info(f"WINNER_QUEUED ticket={ticket.ticket_number}")
+    except Exception as exc:
+        logger.error(f"SQS_PUBLISH_FAILED ticket={ticket.ticket_number} error={exc}")
 
 
 def create_app():
@@ -147,6 +174,17 @@ def create_app():
                       ticket.id if ticket else None,
                       f"ticket={ticket_number} outcome={result['outcome']}")
             db.session.commit()
+
+            if result["outcome"] == "WINNER":
+                _publish_winner_event(
+                    queue_url=app.config.get("SQS_QUEUE_URL", ""),
+                    region=app.config.get("AWS_REGION", "us-east-1"),
+                    ticket=ticket,
+                    draw=draw,
+                    draw_date_str=draw_date_str,
+                    verified_by_id=current_user.id,
+                )
+
         return render_template("verify.html", result=result,
                                ticket_number=ticket_number, draw_date=draw_date_str)
 
