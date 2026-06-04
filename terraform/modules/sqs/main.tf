@@ -32,7 +32,7 @@ resource "aws_sqs_queue" "verification_claims" {
   name = "${var.project_name}-verification-claims-queue"
 
   # How long a consumer has to process a message before SQS makes it visible again.
-  visibility_timeout_seconds = 30
+  visibility_timeout_seconds = 120
 
   # Keep messages for 1 day - long enough to survive a claims-service outage
   message_retention_seconds = 86400
