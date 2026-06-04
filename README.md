@@ -11,7 +11,7 @@ The platform allows an authorized customer service agent to:
 - Generate claim confirmation with QR code
 - Search registered claims by claimant name, ticket number, or claim ID
 
-To review the collaborators and their contributions, please view [Team Contributions](./docs/team_contribution.md)
+This project originated from a graduate cloud computing team project and has since been independently extended with additional cloud-native architecture, infrastructure, and operational enhancements.
 
 ---
 
