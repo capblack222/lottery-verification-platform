@@ -51,3 +51,13 @@ output "sqs_dlq_arn" {
   description = "ARN of the claims dead letter queue"
   value       = module.sqs.dlq_arn
 }
+
+output "redis_endpoint" {
+  description = "ElastiCache Redis primary endpoint hostname"
+  value       = module.redis.redis_endpoint
+}
+
+output "redis_url" {
+  description = "Full Redis URL injected into the verification service (redis://host:port/0)"
+  value       = module.redis.redis_url
+}

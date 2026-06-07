@@ -1,3 +1,19 @@
+module "redis" {
+  source = "./modules/redis"
+
+  project_name       = var.project_name
+  vpc_id             = module.networking.vpc_id
+  private_subnet_ids = module.networking.private_subnet_ids
+  ecs_sg_id          = module.security.ecs_sg_id
+}
+
+# Attach the CloudWatch PutMetricData policy here 
+# to keep module boundaries clean and avoid circular references.
+resource "aws_iam_role_policy_attachment" "ecs_cw_metrics" {
+  role       = module.ecs.ecs_task_role_name
+  policy_arn = module.redis.cloudwatch_metrics_policy_arn
+}
+
 module "networking" {
   source = "./modules/networking"
 
@@ -61,6 +77,7 @@ module "ecs" {
   claims_image        = "${module.ecr.claims_repository_url}:latest"
   db_host             = module.db_security.db_host
   sqs_queue_url       = module.sqs.queue_url
+  redis_url           = module.redis.redis_url
 }
 
 module "db_security" {

@@ -1,5 +1,3 @@
-# modules/ecs/main.tf
-
 resource "aws_ecs_cluster" "main" {
   name = "${var.project_name}-cluster"
 }
@@ -138,6 +136,14 @@ resource "aws_ecs_task_definition" "verification_task" {
         {
           name  = "SQS_QUEUE_URL"
           value = var.sqs_queue_url
+        },
+        {
+          name  = "REDIS_URL"
+          value = var.redis_url
+        },
+        {
+          name  = "CACHE_TTL_SECONDS"
+          value = "3600"
         }
       ]
     }

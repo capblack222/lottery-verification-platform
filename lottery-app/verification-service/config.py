@@ -42,3 +42,8 @@ class Config:
     SQLALCHEMY_DATABASE_URI = (
         f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
+
+    # Redis cache - empty string disables caching so the service degrades gracefully
+    # when Redis is unavailable (e.g., local dev without ElastiCache).
+    REDIS_URL = os.environ.get("REDIS_URL", "")
+    CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "3600"))

@@ -49,7 +49,11 @@ Amazon ECS Cluster on Fargate
    |                    |
    |                    |
 verification-service    claims-service
-   |                    |
+   |       |            |
+   |       |            |
+   |  ElastiCache       |
+   |   Redis            |
+   |  (cache)           |
    +---------+----------+
              |
              v
@@ -62,9 +66,11 @@ Supporting AWS services:
 ```text
 Amazon ECR            → stores Docker images
 AWS Secrets Manager   → stores DB credentials and DB host
+ElastiCache Redis     → caches ticket verification results (cache-aside, 1-hour TTL)
 CloudWatch Logs       → stores ECS application logs and VPC Flow Logs
-CloudWatch Dashboard  → displays ECS, ALB, RDS, and app metrics
-CloudWatch Alarms     → monitors CPU, memory, ALB 5XX, unhealthy targets, and RDS CPU
+CloudWatch Dashboard  → displays ECS, ALB, RDS, Redis cache, and app metrics
+CloudWatch Alarms     → monitors CPU, memory, ALB 5XX, unhealthy targets, RDS CPU,
+                        cache hit rate, and verification latency
 Amazon SNS            → sends CloudWatch alarm notifications
 AWS CloudTrail        → captures AWS API activity
 Amazon S3             → stores CloudTrail and ALB access logs
@@ -78,6 +84,10 @@ VPC Flow Logs         → captures network traffic metadata
 lottery-app/
 ├── claims-service/
 ├── verification-service/
+│   ├── app.py            # Flask app with Redis cache-aside logic
+│   ├── config.py         # REDIS_URL and CACHE_TTL_SECONDS config
+│   ├── benchmark.py      # Latency benchmark: before vs after Redis
+│   └── requirements.txt  # includes redis==5.0.8
 └── deploy.sh
 
 terraform/
@@ -97,7 +107,9 @@ terraform/
     ├── ecs/
     ├── monitoring/
     ├── networking/
-    └── security/
+    ├── redis/            # ElastiCache Redis cluster, security group, IAM policy
+    ├── security/
+    └── sqs/
 ```
 
 ---
@@ -252,12 +264,120 @@ The platform includes:
 
 ---
 
+## Redis Caching Layer
+
+### Rationale
+
+Every ticket verification requires two PostgreSQL queries: one to resolve the draw by date, and one to look up the ticket by number and draw ID. In a lottery event window, the same winning-ticket numbers are frequently re-verified (agents double-checking, supervisors auditing). Without caching, each of those lookups adds 50–200 ms of RDS round-trip latency and contributes CPU load to the database instance.
+
+Amazon ElastiCache Redis provides a sub-millisecond in-memory store in the same private subnet as the ECS tasks. The expected warm-path latency drops from ~100 ms (RDS) to ~2–5 ms (Redis), a reduction of 20–50×. This also meaningfully reduces RDS CPU utilization during peak verification load.
+
+### Infrastructure (`terraform/modules/redis/`)
+
+| Resource | Purpose |
+|---|---|
+| `aws_elasticache_replication_group` | Single-node Redis 7.1 cluster (`cache.t3.micro`). `num_cache_clusters=1` keeps cost minimal; increase + set `automatic_failover_enabled=true` for Multi-AZ HA. |
+| `aws_elasticache_subnet_group` | Places Redis in the same private subnets as ECS tasks. |
+| `aws_security_group` (redis-sg) | Allows inbound TCP 6379 **only from the ECS task security group** - no public access. |
+| `aws_iam_policy` (cw-metrics) | Scoped `cloudwatch:PutMetricData` to the `LotteryPlatform/VerificationService` namespace. Attached to the ECS task role at root `main.tf` (same pattern as SQS) to avoid a circular module dependency. |
+
+Encryption at rest is enabled using the AWS-managed key. In-transit TLS is off by default to keep the Python client simple; enable `transit_encryption_enabled = true` with an `auth_token` if your compliance posture requires it.
+
+### Cache-aside Pattern (`app.py`)
+
+```text
+POST /verify
+  │
+  ├─ Build cache key: "verify:{TICKET_NUMBER}:{DRAW_DATE}"
+  │
+  ├─ Redis GET(key)
+  │      │
+  │      ├─ HIT  → deserialise → return result  ─────────────────┐
+  │      │                                                        │
+  │      └─ MISS → query RDS (draw + ticket lookups)             │
+  │                 │                                             │
+  │                 ├─ outcome != WINNER?                         │
+  │                 │     └─ Redis SETEX(key, TTL, serialised)    │
+  │                 │                                             │
+  │                 └─ return result ───────────────────────────►─┤
+  │                                                               │
+  ├─ Emit CloudWatch metrics (CacheHit/Miss/Rate, Latency)        │
+  │                                                               │
+  ├─ Write audit log (DB insert - always, regardless of source) ◄─┘
+  │
+  └─ SQS event only when outcome=WINNER AND result is from RDS
+```
+
+**Why WINNER outcomes are not cached:** once an agent verifies a winning ticket, the claims service rapidly transitions it to `CLAIMED`. Serving a stale `WINNER` result from cache instead of `ALREADY_CLAIMED` would mislead a second agent. All other outcomes - `NOT_FOUND`, `NOT_WINNER`, `ALREADY_CLAIMED` - are immutable, so caching them for the full TTL is safe.
+
+**Graceful degradation:** if `REDIS_URL` is unset or the cluster is temporarily unreachable (2-second connect/socket timeout), the service falls back to direct RDS queries with no change in behaviour. The health endpoint (`/health`) reports `"redis": "disabled"` or `"redis": "unreachable"` to aid diagnostics.
+
+### Cache Key and TTL
+
+| Parameter | Value | Source |
+|---|---|---|
+| Key format | `verify:{ticket_number}:{draw_date}` | app.py |
+| Default TTL | 3600 s (1 hour) | `CACHE_TTL_SECONDS` env var |
+| Override | Set `CACHE_TTL_SECONDS` in ECS task definition | `terraform/modules/ecs/main.tf` |
+
+### CloudWatch Metrics
+
+All metrics are emitted to the `LotteryPlatform/VerificationService` namespace on every POST to `/verify` when `REDIS_URL` is set.
+
+| Metric | Unit | Stat to use | Description |
+|---|---|---|---|
+| `CacheHit` | Count | Sum | Incremented by 1 on each Redis hit |
+| `CacheMiss` | Count | Sum | Incremented by 1 on each Redis miss |
+| `CacheHitRate` | None (0.0–1.0) | Average | Per-request binary; Average over a window = hit-rate fraction |
+| `VerificationLatency` | Milliseconds | p90 / p95 | End-to-end latency of the verify POST handler |
+
+**Dashboard row:** the CloudWatch operations dashboard (`${project_name}-operations`) has a fourth row with two panels - *Redis Cache Operations* (hit/miss counts per minute) and *Cache Hit Rate & Verification Latency p90*.
+
+**Alarms:**
+
+| Alarm | Threshold | Action |
+|---|---|---|
+| `cache-hit-rate-low` | Average `CacheHitRate` < 0.5 over 2 × 5 min | SNS topic |
+| `verification-latency-high` | p90 `VerificationLatency` > 500 ms over 2 × 5 min | SNS topic |
+
+### Performance Benchmark
+
+Run `benchmark.py` to measure the before-vs-after latency improvement:
+
+```bash
+# Step 1 - baseline (deploy WITHOUT Redis, or set REDIS_URL="" in the task definition)
+python lottery-app/verification-service/benchmark.py \
+  --base-url https://<alb-dns> \
+  --ticket-number TKT-001-WIN \
+  --draw-date 2024-01-15 \
+  --username agent1 --password <pw> \
+  --requests 100
+# All 100 requests hit RDS → expect avg ~80–150 ms
+
+# Step 2 - with Redis (REDIS_URL set, cache warmed after first request)
+python lottery-app/verification-service/benchmark.py \
+  --base-url https://<alb-dns> \
+  --ticket-number TKT-001-WIN \
+  --draw-date 2024-01-15 \
+  --username agent1 --password <pw> \
+  --requests 100
+# Request 1 (cold): ~80–150 ms  |  Requests 2–100 (warm): ~2–10 ms
+# Expected output: "Cache speedup: 20x–50x"
+```
+
+The script prints cold latency, warm avg, p50/p95/p99, and the overall speedup ratio.
+
+**RDS query volume**: CloudWatch metric `AWS/RDS DBConnections` and `ReadIOPS` should drop significantly after caching is active, since the same ticket+date lookups that used to hit the database are now served entirely from Redis.
+
+---
+
 ## Cost Optimization and Cost Involvement
 
 Approximate US East (N. Virginia / `us-east-1`) cost drivers:
 
 | Resource | Cost involvement | Approximate impact if left running |
 |---|---:|---|
+| ElastiCache Redis (`cache.t3.micro`) | Charged hourly | About `$0.017/hour` = `$12.24/month`; destroy after demo |
 | NAT Gateway | Charged hourly and per GB processed | About `$0.045/hour` = `$32.40/month` plus about `$0.045/GB` processed |
 | Application Load Balancer | Charged per ALB-hour and LCU-hour | About `$0.0225/hour` = `$16.20/month`, plus LCU usage |
 | ECS Fargate | Charged by vCPU-seconds and GB-seconds | For two small 0.25 vCPU / 0.5 GB tasks running 24/7: roughly `$18/month`; higher task sizes cost more |

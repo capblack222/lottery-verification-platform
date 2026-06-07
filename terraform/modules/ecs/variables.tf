@@ -16,3 +16,9 @@ variable "sqs_queue_url" {
   type        = string
   default     = ""
 }
+
+variable "redis_url" {
+  description = "Redis URL (redis://host:port/0) injected as REDIS_URL into the verification service"
+  type        = string
+  default     = ""
+}

@@ -524,9 +524,83 @@ resource "aws_cloudwatch_dashboard" "main" {
             [".", "DuplicateClaimAttemptCount"]
           ]
         }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 18
+        width  = 12
+        height = 6
+
+        properties = {
+          title  = "Redis Cache Operations (per minute)"
+          region = var.aws_region
+          view   = "timeSeries"
+          period = 60
+          stat   = "Sum"
+
+          metrics = [
+            ["LotteryPlatform/VerificationService", "CacheHit", { label = "Cache Hit" }],
+            [".", "CacheMiss", { label = "Cache Miss" }]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 18
+        width  = 12
+        height = 6
+
+        properties = {
+          title  = "Cache Hit Rate (avg) & Verification Latency p90"
+          region = var.aws_region
+          view   = "timeSeries"
+          period = 300
+
+          metrics = [
+            ["LotteryPlatform/VerificationService", "CacheHitRate", { stat = "Average", label = "Hit Rate (0–1)", yAxis = "left" }],
+            [".", "VerificationLatency", { stat = "p90", label = "Latency p90 (ms)", yAxis = "right" }]
+          ]
+        }
       }
     ]
   })
+}
+
+# -----------------------------
+# Redis Cache Metric Alarms
+# Namespace: LotteryPlatform/VerificationService (emitted by the app)
+# treat_missing_data = notBreaching so these are silent when Redis is offline or
+# traffic is absent (e.g., after a fresh deploy with no requests yet).
+# -----------------------------
+
+resource "aws_cloudwatch_metric_alarm" "cache_hit_rate_low" {
+  alarm_name          = "${var.project_name}-cache-hit-rate-low"
+  alarm_description   = "Verification service cache hit rate dropped below 50% over 5 minutes. Redis may be cold, misconfigured, or the TTL may be too short."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CacheHitRate"
+  namespace           = "LotteryPlatform/VerificationService"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 0.5
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  treat_missing_data  = "notBreaching"
+}
+
+resource "aws_cloudwatch_metric_alarm" "verification_latency_high" {
+  alarm_name          = "${var.project_name}-verification-latency-high"
+  alarm_description   = "Verification service p90 latency exceeded 500 ms. Redis cache may be unavailable, causing every request to hit RDS."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "VerificationLatency"
+  namespace           = "LotteryPlatform/VerificationService"
+  period              = 300
+  extended_statistic  = "p90"
+  threshold           = 500
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  treat_missing_data  = "notBreaching"
 }
 
 # -----------------------------
