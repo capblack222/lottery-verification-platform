@@ -153,9 +153,9 @@ POST /verify
   │
   ├─ Redis GET(key)
   │      │
-  │      ├─ HIT  → deserialise → return result  ─────────────────┐
+  │      ├─ HIT  → deserialise → return result   ─────────────────┐
   │      │                                                        │
-  │      └─ MISS → query RDS (draw + ticket lookups)             │
+  │      └─ MISS → query RDS (draw + ticket lookups)              │
   │                 │                                             │
   │                 ├─ outcome != WINNER?                         │
   │                 │     └─ Redis SETEX(key, TTL, serialised)    │
