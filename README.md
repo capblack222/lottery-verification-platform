@@ -576,6 +576,10 @@ aws secretsmanager delete-secret \
 
 ---
 
-## Deployment Guide
+## Documentation
 
-Full deployment steps, post-deployment validation, application test data, load testing scripts, troubleshooting, and teardown instructions are in the [Deployment & Troubleshooting Guide](./docs/deployment_guide.md).
+| Guide | Contents |
+|---|---|
+| [Deployment Guide](./docs/deployment_guide.md) | Prerequisites, Quick Start, Terraform + Docker deployment steps, post-deployment validation, success checklist, enable log metric filters, test data, destroy/cleanup |
+| [Operations Guide](./docs/operations_guide.md) | CloudWatch Logs, dashboard panels, custom Redis metrics, alarms reference, SNS, CloudTrail, VPC Flow Logs, load testing scripts, operational procedures |
+| [Troubleshooting Guide](./docs/troubleshooting.md) | ECS tasks stuck in PENDING, health check failures, Redis unreachable, metric filter timing, ECR/S3 destroy blockers, DLQ messages, alarm emails, high latency — plus full useful commands reference |

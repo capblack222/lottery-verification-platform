@@ -1,45 +1,125 @@
-# Deployment & Troubleshooting Guide
+# Deployment Guide
 
-## Repository Structure
+> Deploy the Lottery Verification Platform to AWS using Terraform and Docker.
+
+| Document | Purpose |
+|---|---|
+| **Deployment Guide** ← you are here | Prerequisites, deployment steps, validation, cleanup |
+| [Operations Guide](./operations_guide.md) | CloudWatch, alarms, monitoring, load testing |
+| [Troubleshooting Guide](./troubleshooting.md) | Failure diagnosis, resolution, useful commands |
+
+---
+
+## Quick Start
+
+For engineers with AWS CLI, Terraform ≥ 1.0, and Docker Desktop already configured. Follow the full guide below if you need additional context at any step.
+
+```bash
+# 1. Generate TLS certificate (from repo root)
+cd terraform && mkdir -p certs
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout certs/private.key \
+  -out certs/certificate.crt
+
+# 2. Configure variables
+#    Set alarm_email and confirm enable_app_log_metric_filters = false
+vi terraform.tfvars
+
+# 3. Deploy infrastructure (~20–35 min, RDS takes the longest)
+terraform fmt -recursive && terraform init && terraform validate
+terraform plan
+terraform apply   # enter DB password and 'yes' when prompted
+
+# 4. Update AWS Account ID in deploy.sh, then build and push images
+cd ../lottery-app
+vi deploy.sh      # replace <ENTER_ACCNT_ID> with your AWS account ID
+bash deploy.sh
+
+# 5. Validate
+ALB=$(cd ../terraform && terraform output -raw alb_dns_name)
+curl -k https://$ALB/health
+# Expected: {"status":"ok","db":"reachable","redis":"reachable"}
+
+# 6. Access the platform
+echo "https://$ALB/login"
+```
+
+> [!IMPORTANT]
+> `enable_app_log_metric_filters` must be `false` on first deploy. ECS log groups do not exist until after ECS tasks start. Enabling filters before that will cause Terraform to fail. See [Step 7](#7-update-terraformtfvars) and [Enable Log Metric Filters](#enable-log-metric-filters).
+
+---
+
+## Deployment Overview
+
+This guide deploys:
+
+- A **multi-AZ VPC** with public, private app, and private DB subnet tiers
+- Two **ECS Fargate** services (`verification-service`, `claims-service`)
+- **Amazon RDS PostgreSQL** in private DB subnets
+- **ElastiCache Redis** for ticket verification caching
+- **Amazon SQS** with Dead Letter Queue for async WINNER event processing
+- **Application Load Balancer** with HTTPS termination
+- Full **observability stack** — CloudWatch, CloudTrail, VPC Flow Logs, SNS, S3
+
+### Deployment Timeline
+
+| Stage | What happens | Approximate duration |
+|---|---|---|
+| `terraform init` | Downloads providers and modules | ~30 seconds |
+| Networking | VPC, subnets, NAT Gateway, security groups | 2–3 minutes |
+| **RDS provisioning** | PostgreSQL instance creation — the slowest step | **10–15 minutes** |
+| Remaining infrastructure | ECS, ALB, ECR, ElastiCache, SQS, monitoring | 3–5 minutes |
+| Docker build + push | Multi-platform `linux/amd64` builds for both services | 3–7 minutes |
+| ECS stabilization | Tasks pull images, initialize DB, pass health checks | 2–5 minutes |
+| **Total** | | **~20–35 minutes** |
+
+### Deployment Dependency Order
+
+The deployment has strict sequencing requirements. Violating this order causes failures.
 
 ```text
-lottery-app/
-├── claims-service/
-├── verification-service/
-└── deploy.sh
-
-terraform/
-├── provider.tf
-├── variables.tf
-├── main.tf
-├── outputs.tf
-├── terraform.tfvars              
-├── certs/                       
-│   ├── private.key
-│   └── certificate.crt
-└── modules/
-    ├── acm/
-    ├── alb/
-    ├── db_security/
-    ├── ecr/
-    ├── ecs/
-    ├── monitoring/
-    ├── networking/
-    └── security/
+Step 1 — terraform apply
+         Provisions all AWS infrastructure including ECR repositories
+              │
+              ▼
+Step 2 — bash deploy.sh
+         Builds Docker images and pushes to ECR
+         ⚠ ECR repositories must exist before this step
+              │
+              ▼
+Step 3 — ECS auto-pull and start
+         ECS tasks pull images from ECR and start
+         ⚠ Images must exist in ECR before tasks can become RUNNING
+              │
+              ▼
+Step 4 — ECS log groups created
+         Log groups appear once tasks emit their first logs
+         ⚠ Metric filters require log groups to exist
+              │
+              ▼
+Step 5 — Enable metric filters (second terraform apply)
+         enable_app_log_metric_filters = true
+              │
+              ▼
+Step 6 — SNS subscription confirmation
+         Alarm notifications require manual email confirmation
+         ⚠ Alarms fire but emails are not delivered until confirmed
 ```
+
+---
 
 ## Prerequisites
 
-### 1. Install:
+### 1. Install
 
-- Terraform
-- AWS CLI
+- Terraform ≥ 1.0
+- AWS CLI v2
 - Docker Desktop
-- Docker Buildx
-- Git or GitHub Desktop
+- Docker Buildx (bundled with Docker Desktop)
+- Git
 - OpenSSL
 
-### 2. Verify:
+### 2. Verify
 
 ```bash
 terraform version
@@ -48,25 +128,26 @@ docker --version
 docker buildx version
 ```
 
-### 3. Configure AWS:
+### 3. Configure AWS
 
 ```bash
 aws configure
 ```
+
 Provide:
 
-- AWS Access Key
+- AWS Access Key ID
 - AWS Secret Access Key
-- Default region (`us-east-1`)
-- Output format (`json`)
- 
-### 4. Confirm identity:
+- Default region: `us-east-1`
+- Output format: `json`
+
+### 4. Confirm identity
 
 ```bash
 aws sts get-caller-identity
 ```
 
-Required AWS permissions include:
+Required AWS permissions:
 
 - VPC, subnets, routes, security groups
 - ECS and ECR
@@ -75,6 +156,8 @@ Required AWS permissions include:
 - RDS
 - Secrets Manager
 - ACM
+- ElastiCache (Redis)
+- SQS
 - CloudWatch Logs, dashboards, and alarms
 - CloudTrail
 - S3
@@ -82,139 +165,128 @@ Required AWS permissions include:
 
 ### 5. Enable Docker Buildx
 
-The deployment uses multi-platform Docker builds for ECS Fargate compatibility (`linux/amd64`).
-
-Verify:
+The deployment uses multi-platform Docker builds for ECS Fargate (`linux/amd64` compatibility).
 
 ```bash
 docker buildx version
 ```
 
----
-
 ### 6. Certificate Setup for HTTPS
 
-The ALB HTTPS listener uses a self-signed certificate imported into ACM through Terraform.
+The ALB HTTPS listener requires a certificate imported into ACM. This guide uses a self-signed certificate for demo purposes. In production, replace with a domain-validated public ACM certificate.
 
 From the `terraform` directory:
 
 ```bash
 cd terraform
 
-mkdir certs
+mkdir -p certs
 
 openssl req -x509 -nodes -days 365 \
--newkey rsa:2048 \
--keyout certs/private.key \
--out certs/certificate.crt
+  -newkey rsa:2048 \
+  -keyout certs/private.key \
+  -out certs/certificate.crt
 ```
 
-Expected local files:
+Expected files:
 
 ```text
 terraform/certs/private.key
 terraform/certs/certificate.crt
 ```
 
-Browser warnings are expected because this is a self-signed demo certificate. In production, we replace this with a public ACM certificate validated against a real domain.
+> **Note:** Browsers will show a security warning for self-signed certificates. This is expected in demo deployments.
 
 ### 7. Update terraform.tfvars
-
-Update the following variables:
 
 ```hcl
 alarm_email = "your-email@example.com"
 
-enable_app_log_metric_filters = true
+enable_app_log_metric_filters = false
 ```
-#### alarm_email:
 
-Used for SNS notifications from CloudWatch alarms.
-After deployment, AWS SNS sends a confirmation email which must be accepted to activate notifications.
+**`alarm_email`** — used for SNS CloudWatch alarm notifications. AWS sends a confirmation email after deployment that must be accepted before alerts are delivered.
 
-#### enable_app_log_metric_filters:
+**`enable_app_log_metric_filters`** — controls CloudWatch log metric filter creation.
 
-Controls whether CloudWatch log metric filters are created.
-
-- `true` → metric filters enabled
-- `false` → metric filters skipped
+> [!IMPORTANT]
+> Set `enable_app_log_metric_filters = false` for the first deployment. The ECS log groups (`/ecs/verification-service`, `/ecs/claims-service`) do not exist until ECS tasks start. Creating metric filters against non-existent log groups will cause `terraform apply` to fail. See [Enable Log Metric Filters](#enable-log-metric-filters) for the two-step process.
 
 ### 8. Ensure Docker Is Running
 
-Docker Desktop must be running before executing:
-
-```bash
-./deploy.sh
-```
-
+Docker Desktop must be running before executing `deploy.sh`.
 
 ### 9. Make deploy.sh Executable
 
 ```bash
-chmod +x deploy.sh
+chmod +x lottery-app/deploy.sh
 ```
-
 
 ### 10. Confirm SNS Email Subscription
 
-After deployment:
+After deployment, AWS SNS sends a subscription confirmation email to `alarm_email`.
 
-1. Check email inbox
-2. Open AWS SNS confirmation email
-3. Click **Confirm Subscription**
+1. Check your inbox for an email from `AWS Notifications`
+2. Click **Confirm Subscription**
 
-Without confirmation, CloudWatch alarms will not send notifications.
-
+CloudWatch alarms will fire but email notifications will not be delivered until the subscription is confirmed.
 
 ---
 
-## Terraform Deployment Flow
+## Deployment Steps
 
-Run Terraform commands from the `terraform` directory.
+Run all Terraform commands from the `terraform` directory.
 
-### 1. Format, initialize, and validate
+### 1. Format, Initialize, and Validate
 
 ```bash
 terraform fmt -recursive
-terraform init 
+terraform init
 terraform validate
 ```
 
-### 2. Deploy full infrastructure
-
-Return to Terraform:
+### 2. Deploy Full Infrastructure
 
 ```bash
-cd ../terraform
 terraform plan
 terraform apply
 ```
 
-Type:
-```text
-<DB password here>
-```
-
-And, then type:
+Enter the database password when prompted:
 
 ```text
-yes
+var.db_password
+  Enter a value: <your-db-password>
 ```
 
-when prompted.
+Then confirm:
 
-*NOTE: RDS provisioning may take 10–15 minutes. So, please wait patiently until you see the output mentioned under Post-Deployment Validations.*
+```text
+Do you want to perform these actions?
+  Enter a value: yes
+```
 
-### 3. Docker Build + Push Process
+> **Note:** RDS provisioning takes 10–15 minutes. Wait until Terraform outputs are printed before proceeding.
 
-IMPORTANT:
-Terraform creates the ECR repositories, but Docker images must still be built and pushed before ECS services can run successfully.
+### 3. Docker Build and Push
+
+> **Important:** Terraform creates the ECR repositories during `terraform apply`. Docker images must be built and pushed to ECR before ECS services can run successfully. This is a hard dependency — do not skip or reorder.
 
 ### 4. Run deploy.sh
 
-NOTE: Update `AWS Account ID` in the placeholder in deploy.sh file inside the lottery-app folder.
+Open `lottery-app/deploy.sh` and replace the AWS Account ID placeholder:
 
-Then in lottery-app directory run:
+```bash
+AWS_ACCOUNT_ID="<ENTER_ACCNT_ID>"
+```
+
+Replace with your actual 12-digit AWS account ID:
+
+```bash
+AWS_ACCOUNT_ID="123456789012"
+```
+
+From the `lottery-app` directory:
 
 ```bash
 bash deploy.sh
@@ -226,77 +298,198 @@ Expected output:
 ✅ Both images pushed to ECR
 ```
 
-### 5. ECR repositories
+### 5. Verify ECR Repositories
 
-Terraform automatically creates the following Amazon ECR repositories:
+Terraform creates these repositories automatically:
 
-- verification-service
-- claims-service
+- `verification-service`
+- `claims-service`
 
-These repositories are used by ECS to pull Docker container images.
+To verify images are present:
 
-To verify:
+```bash
+aws ecr list-images --repository-name verification-service --region us-east-1
+aws ecr list-images --repository-name claims-service --region us-east-1
+```
 
-1. Open AWS Console
-2. Navigate to Amazon ECR
-3. Verify above two repositories have been created
+Both should return at least one image with tag `latest`.
 
 ### 6. ECS Auto Deployment
 
-After images are pushed successfully:
-
-- ECS automatically retries failed task launches
-- Tasks transition from:
+After images are pushed, ECS automatically retries pending task launches:
 
 ```text
 PENDING → RUNNING
 ```
 
-- Target groups become healthy
-- ALB becomes reachable
- 
+Once tasks are running:
+
+- Target group health checks pass
+- ALB begins routing traffic
+
+ECS stabilization typically takes 2–5 minutes. Proceed to validation once tasks show `RUNNING`.
 
 ---
 
 ## Post-Deployment Validation
 
+Work through each section in order. All checks should pass before considering the deployment complete.
+
+### Infrastructure
+
+Verify all Terraform outputs are present:
+
+```bash
+terraform output
+```
+
 Expected outputs:
 
-| Output | Description |
+| Output | What to check |
 |---|---|
-| `alb_dns_name` | Public DNS endpoint of the ALB |
-| `claims_ecr_url` | Claims service ECR repository URL |
-| `verification_ecr_url` | Verification service ECR repository URL |
-| `db_secret_arn` | Secrets Manager secret ARN |
-| `rds_endpoint` | RDS PostgreSQL endpoint |
-| `cloudwatch_dashboard_name` | CloudWatch dashboard name |
+| `alb_dns_name` | Non-empty DNS hostname |
+| `verification_ecr_url` | ECR URL for verification service |
+| `claims_ecr_url` | ECR URL for claims service |
+| `db_secret_arn` | Secrets Manager ARN |
+| `rds_endpoint` | RDS hostname |
+| `redis_endpoint` | ElastiCache hostname |
+| `redis_url` | Full `redis://` URL |
+| `sqs_queue_url` | SQS queue HTTPS URL |
+| `sqs_dlq_arn` | DLQ ARN |
+| `cloudwatch_dashboard_name` | Dashboard name |
 | `cloudtrail_arn` | CloudTrail ARN |
-| `cloudtrail_bucket_name` | S3 bucket storing CloudTrail logs |
+| `cloudtrail_bucket_name` | S3 bucket name |
 | `sns_alarm_topic_arn` | SNS topic ARN |
-| `vpc_flow_log_group_name` | VPC Flow Logs log group |
-| `vpc_flow_log_id` | VPC Flow Logs resource ID |
+| `vpc_flow_log_group_name` | Log group name |
+| `vpc_flow_log_id` | Flow log resource ID |
 
-## Access the application
+### ECS Services
+
+```bash
+aws ecs describe-services \
+  --cluster lottery-platform-cluster \
+  --services verification-service claims-service \
+  --region us-east-1 \
+  --query 'services[*].{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
+```
+
+**Success criteria:** both services show `"status": "ACTIVE"` and `runningCount` equals `desiredCount`.
+
+### ALB and Application
+
+```bash
+ALB=$(terraform output -raw alb_dns_name)
+
+# Verification service health
+curl -k https://$ALB/health
+
+# Claims service health
+curl -k https://$ALB/claims/health
+```
+
+**Success criteria:**
+
+```json
+{
+  "status": "ok",
+  "db": "reachable",
+  "redis": "reachable"
+}
+```
+
+If `"redis"` shows `"unreachable"` or `"disabled"`, see the [Troubleshooting Guide](./troubleshooting.md#redis-unreachable).
+
+### Application Login
+
+Navigate to:
 
 ```text
 https://<alb_dns_name>/login
 ```
 
-Health checks:
+Log in with the agent test credentials:
 
 ```text
-https://<alb_dns_name>/health
-https://<alb_dns_name>/claims/health
+Username: agent1
+Password: Agent@123
 ```
 
-Expected response:
+**Success criteria:** redirected to the ticket verification screen without error.
+
+### SQS Queue
+
+```bash
+aws sqs get-queue-attributes \
+  --queue-url $(terraform output -raw sqs_queue_url) \
+  --attribute-names QueueArn ApproximateNumberOfMessages \
+  --region us-east-1
+```
+
+**Success criteria:** command returns queue ARN and `ApproximateNumberOfMessages` (expected `0` on a fresh deployment).
+
+### Observability
+
+```bash
+aws logs describe-log-groups \
+  --log-group-name-prefix /ecs \
+  --region us-east-1 \
+  --query 'logGroups[*].logGroupName'
+```
+
+**Success criteria:** output includes both:
 
 ```json
-{
-  "db": "reachable",
-  "status": "ok"
-}
+["/ecs/claims-service", "/ecs/verification-service"]
 ```
+
+Then confirm the CloudWatch dashboard exists:
+
+```bash
+terraform output cloudwatch_dashboard_name
+```
+
+Navigate to CloudWatch → Dashboards in the AWS console and confirm `lottery-platform-operations` is populated with metrics.
+
+---
+
+## Deployment Success Checklist
+
+Use this checklist to confirm operational readiness before considering deployment complete.
+
+- [ ] All 15 Terraform outputs are present (`terraform output`)
+- [ ] Both ECR repositories contain a `latest` image
+- [ ] `verification-service` ECS tasks: `runningCount` = `desiredCount`
+- [ ] `claims-service` ECS tasks: `runningCount` = `desiredCount`
+- [ ] `/health` returns `{"status":"ok","db":"reachable","redis":"reachable"}`
+- [ ] `/claims/health` returns `{"status":"ok","db":"reachable"}`
+- [ ] Login page accessible at `https://<alb>/login`
+- [ ] Ticket verification returns expected outcome for `TKT-001-WIN`
+- [ ] SQS queue exists and is reachable
+- [ ] CloudWatch log groups `/ecs/verification-service` and `/ecs/claims-service` exist
+- [ ] CloudWatch dashboard `lottery-platform-operations` is populated
+- [ ] SNS subscription confirmation email received and confirmed
+
+---
+
+## Enable Log Metric Filters
+
+This is a **two-step process** by design. Log metric filters require the ECS log groups to exist first.
+
+**Step 1** (first `terraform apply` — already done): `enable_app_log_metric_filters = false`
+
+**Step 2** — after ECS tasks are running and log groups exist:
+
+```hcl
+# terraform.tfvars
+enable_app_log_metric_filters = true
+```
+
+```bash
+terraform plan
+terraform apply
+```
+
+This creates CloudWatch metric filters for `LOGIN_FAIL`, `CLAIM_REGISTERED`, and `DUPLICATE_CLAIM_ATTEMPT` log patterns and enables the Application Events dashboard panel.
 
 ---
 
@@ -309,328 +502,59 @@ Username: agent1
 Password: Agent@123
 ```
 
-### Ticket verification
+### Ticket Verification
 
-Winning ticket, unregistered:
+| Scenario | Ticket Number | Date |
+|---|---|---|
+| Winning — not yet registered | `TKT-001-WIN` | March 15, 2026 |
+| Winning — already registered | `TKT-002-WIN` | March 15, 2026 |
+| Losing ticket | `TKT-004-LOSE` | March 15, 2026 |
+| Ticket not found | `TKT-005-LOSE` | March 15, 2026 |
 
-```text
-Ticket Number: TKT-001-WIN
-Date: March 15, 2026
-```
-
-Winning ticket, already registered:
-
-```text
-Ticket Number: TKT-002-WIN
-Date: March 15, 2026
-```
-
-Losing ticket:
+### Claims Search
 
 ```text
-Ticket Number: TKT-004-LOSE
-Date: March 15, 2026
+Claimant name:  Alice Johnson
+Ticket Number:  TKT-002-WIN
+Claim ID:       CLM-2026-000001
 ```
 
-Ticket not found:
-
-```text
-Ticket Number: TKT-005-LOSE
-Date: March 15, 2026
-```
-
-### Claims search
-
-```text
-Claimant name: Alice Johnson
-Ticket Number: TKT-002-WIN
-Claim ID: CLM-2026-000001
-```
-
-### Register unclaimed tickets
-
-- Verify Winning ticket (unregistered)
-
-```text
-Ticket Number: TKT-001-WIN
-Date: March 15, 2026
-```
-- Click Register
-- Update details and confirm registration
-  
----
-
-## Database and Security Implementation
-
-The platform uses **Amazon RDS PostgreSQL** as the backend relational database for lottery ticket verification, claimant registration, claim status tracking, QR confirmation records, and audit history.
-
----
-
-## Logging and Monitoring
-
-The monitoring implementation is located in:
-
-```text
-terraform/modules/monitoring/
-├── main.tf
-├── variables.tf
-└── outputs.tf
-```
-
-The platform includes:
-
-- ECS application logs in CloudWatch Logs
-- CloudWatch dashboard
-- CloudWatch alarms
-- SNS alarm topic and optional email subscription
-- CloudTrail activity logging
-- VPC Flow Logs
-- ALB access logs stored in S3
-
-### CloudWatch Logs
-
-Expected log groups:
-
-```text
-/ecs/verification-service
-/ecs/claims-service
-/aws/vpc/lottery-platform-flow-logs
-```
-
-### CloudWatch Dashboard
-
-Expected dashboard:
-
-```text
-lottery-platform-operations
-```
-
-Dashboard widgets:
-
-- ECS CPU utilization
-- ECS memory utilization
-- ALB 5XX errors
-- Unhealthy target count
-- RDS CPU utilization
-- Application event metrics
-
-### CloudWatch Alarms
-
-Configured alarms include:
-
-- Verification service CPU high
-- Claims service CPU high
-- Verification service memory high
-- Claims service memory high
-- ALB 5XX high
-- Verification unhealthy targets
-- Claims unhealthy targets
-- RDS CPU high
-- Login fail spike, if application metric filters are enabled
-
-### Application Log Metric Filters
-
-Metric filters are controlled by:
-
-```hcl
-enable_app_log_metric_filters = false
-```
-
-Keep it `false` during first deployment. After the ECS log groups exist, set:
-
-```hcl
-enable_app_log_metric_filters = true
-```
-
-Then run:
-
-```bash
-terraform plan
-terraform apply
-```
-
-*NOTE: The Application Events dashboard only shows data when the app emits logs matching those exact patterns.*
-
-### SNS Email Alerts
-
-Set locally:
-
-```hcl
-alarm_email = "your-email@example.com"
-```
-
-After Terraform applies, confirm the email from AWS SNS. Alarm emails will not be delivered until the subscription is confirmed.
-
-### Activity / Load Demonstration
-
-Generate traffic:
-
-```powershell
-$ALB = "https://<alb-dns-name>"
-
-for ($i=1; $i -le 100; $i++) {
-  curl.exe -k -s -o NUL "$ALB/health"
-}
-```
-
-More load:
-
-```powershell
-$ALB = "https://<alb-dns-name>"
-
-$jobs = 1..10 | ForEach-Object {
-  Start-Job -ScriptBlock {
-    param($url)
-    for ($i=1; $i -le 50; $i++) {
-      curl.exe -k -s -o NUL "$url/health"
-    }
-  } -ArgumentList $ALB
-}
-
-Wait-Job $jobs
-Receive-Job $jobs
-Remove-Job $jobs
-```
-
-*NOTE: Wait 3–10 minutes, then refresh the CloudWatch dashboard using the `Last 1 hour` time range.*
-
----
-
-## Troubleshooting
-
-### ALB returns 503
-
-Possible causes:
-
-- ECS tasks are not running
-- ECR repositories do not contain images
-- Target group health checks are failing
-- Container failed to start
-
-Checks:
-
-```bash
-aws ecs describe-services --cluster lottery-platform-cluster --services verification-service claims-service --region us-east-1
-```
-
-Check target groups:
-
-```text
-EC2 → Target Groups
-```
-
-Check logs:
-
-```text
-CloudWatch → Logs → /ecs/verification-service
-CloudWatch → Logs → /ecs/claims-service
-```
-
----
-
-### ALB returns 404
-
-Possible causes:
-
-- ALB listener rule path mismatch
-- Application route missing
-- Wrong service URL
-- Duplicate `/claims` path
-
-Recommended routes:
-
-```text
-/login
-/verify
-/claims/search
-/claims/new/<ticket_id>
-/health
-/claims/health
-```
-
----
-
-### Certificate files missing
-
-Error:
-
-```text
-Invalid value for path parameter: no file exists at certs/private.key
-```
-
-Fix:
-
-```bash
-cd terraform
-mkdir -p certs
-MSYS_NO_PATHCONV=1 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout certs/private.key \
-  -out certs/certificate.crt \
-  -subj "/CN=lottery-platform.local"
-```
-
----
-
-### Secret already scheduled for deletion
-
-Error:
-
-```text
-You can't create this secret because a secret with this name is already scheduled for deletion
-```
-
-Restore:
-
-```bash
-aws secretsmanager restore-secret --secret-id lottery-platform-db-secret --region us-east-1
-```
-
-Or force-delete and recreate:
-
-```bash
-aws secretsmanager delete-secret \
-  --secret-id lottery-platform-db-secret \
-  --force-delete-without-recovery \
-  --region us-east-1
-```
-
----
-
-### KMS key pending deletion
-
-Error:
-
-```text
-Secrets Manager can't decrypt the secret value because the KMS key is pending deletion
-```
-
-Fix:
-
-```bash
-aws kms cancel-key-deletion --key-id <key-id> --region us-east-1
-aws kms enable-key --key-id <key-id> --region us-east-1
-```
+### Register an Unclaimed Winning Ticket
+
+1. Verify `TKT-001-WIN` on `March 15, 2026`
+2. Click **Register**
+3. Complete claimant details and confirm
 
 ---
 
 ## Destroy / Cleanup
 
-Destroy the environment to avoid AWS charges.
+> [!WARNING]
+> NAT Gateway, ALB, RDS, ElastiCache, and Fargate accrue charges continuously while running. Destroy the stack immediately after use.
 
-From `terraform`:
+From the `terraform` directory:
 
 ```bash
 terraform destroy
 ```
 
-If ECR blocks destroy due to images:
+Enter the database password and `yes` when prompted.
+
+**If ECR blocks destroy** (repositories contain images):
 
 ```bash
-aws ecr batch-delete-image --repository-name verification-service --image-ids imageTag=latest --region us-east-1
-aws ecr batch-delete-image --repository-name claims-service --image-ids imageTag=latest --region us-east-1
+aws ecr batch-delete-image \
+  --repository-name verification-service \
+  --image-ids imageTag=latest \
+  --region us-east-1
+
+aws ecr batch-delete-image \
+  --repository-name claims-service \
+  --image-ids imageTag=latest \
+  --region us-east-1
 ```
 
-If S3 buckets block destroy:
+**If S3 buckets block destroy** (buckets contain log objects):
 
 ```bash
 aws s3 rm s3://<cloudtrail-bucket-name> --recursive
@@ -643,51 +567,22 @@ Then rerun:
 terraform destroy
 ```
 
-After destroy, manually verify deletion of:
+### Post-Destroy Verification
 
-- ECS services and cluster
-- ALB and target groups
-- NAT Gateway
-- RDS
-- VPC
-- ECR repositories/images
-- CloudWatch log groups
-- CloudTrail trail
-- S3 log buckets
-- SNS topic
-- Secrets Manager secret
+Manually confirm the following resources are deleted in the AWS console:
 
----
-
-## Useful Commands
-
-Check AWS identity:
-
-```bash
-aws sts get-caller-identity
-```
-
-Check ECR images:
-
-```bash
-aws ecr list-images --repository-name verification-service --region us-east-1
-aws ecr list-images --repository-name claims-service --region us-east-1
-```
-
-Check ECS services:
-
-```bash
-aws ecs list-services --cluster lottery-platform-cluster --region us-east-1
-```
-
-Describe ECS services:
-
-```bash
-aws ecs describe-services --cluster lottery-platform-cluster --services verification-service claims-service --region us-east-1
-```
-
-Get ALB DNS:
-
-```bash
-terraform output alb_dns_name
-```
+| Resource | Where to check |
+|---|---|
+| ECS services and cluster | ECS → Clusters |
+| ALB and target groups | EC2 → Load Balancers / Target Groups |
+| NAT Gateway | VPC → NAT Gateways |
+| RDS instance | RDS → Databases |
+| ElastiCache Redis cluster | ElastiCache → Redis clusters |
+| SQS queue and DLQ | SQS → Queues |
+| VPC | VPC → Your VPCs |
+| ECR repositories | ECR → Repositories |
+| CloudWatch log groups | CloudWatch → Log groups |
+| CloudTrail trail | CloudTrail → Trails |
+| S3 log buckets | S3 → Buckets |
+| SNS topic | SNS → Topics |
+| Secrets Manager secret | Secrets Manager → Secrets |
